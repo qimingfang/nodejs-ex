@@ -8,12 +8,11 @@ const _ = require('lodash')
 const app = express()
 const pkg = require('./package.json')
 
-const port = process.env.PORT || process.env.OPENSHIFT_NODEJS_PORT || 8080
+const port = process.env.PORT || process.env.OPENSHIFT_NODEJS_PORT || 3000
 const ip = process.env.IP || process.env.OPENSHIFT_NODEJS_IP || '0.0.0.0'
 
 const instance = axios.create({
   baseURL: 'https://od-api.oxforddictionaries.com:443/api',
-  timeout: 1000,
   headers: {
     app_id: process.env.APP_ID,
     app_key: process.env.APP_KEY
@@ -31,15 +30,14 @@ router.get('/words/:word', function (req, res) {
   // TODO(fang): throw if word is not found
 
   co(function * () {
-    const wordResults = []
+    let wordResult = {}
 
     // issue the API call
     const result = yield instance.get(`/v1/entries/en/` + word)
       .then(res => res.data)
 
-    const apiResults = _.get(result, 'results', [])
-    apiResults.forEach(apiResult => {
-      const wordResult = {}
+    const apiResult = _.head(_.get(result, 'results', []))
+    if (apiResult) {
       wordResult.id = apiResult.id
 
       const lexicalEntries = _.get(apiResult, 'lexicalEntries', [])
@@ -70,7 +68,7 @@ router.get('/words/:word', function (req, res) {
 
               wordDefintions.push({
                 id: sense.id,
-                defintion: definition,
+                definition: definition,
                 partOfSpeech
               })
             }
@@ -79,10 +77,9 @@ router.get('/words/:word', function (req, res) {
       })
 
       wordResult.definitions = wordDefintions
-      wordResults.push(wordResult)
-    })
+    }
 
-    res.json(wordResults)
+    res.json({ result: wordResult })
   })
 })
 
