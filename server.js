@@ -24,7 +24,8 @@ app.get('/status', function (req, res) {
   res.json(pkg)
 })
 
-app.get('/words/:word', function (req, res) {
+const router = express.Router()
+router.get('/words/:word', function (req, res) {
   const word = req.params.word
 
   // TODO(fang): throw if word is not found
@@ -84,6 +85,8 @@ app.get('/words/:word', function (req, res) {
     res.json(wordResults)
   })
 })
+
+app.use('/v1', router)
 
 app.listen(port, ip)
 console.log('Server running on http://%s:%s', ip, port)
