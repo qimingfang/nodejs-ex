@@ -1,108 +1,91 @@
-//  OpenShift sample Node application
-var express = require('express'),
-    app     = express(),
-    morgan  = require('morgan');
-    
-Object.assign=require('object-assign')
+'use strict'
 
-app.engine('html', require('ejs').renderFile);
-app.use(morgan('combined'))
+const express = require('express')
+const axios = require('axios')
+const co = require('co')
+const _ = require('lodash')
 
-var port = process.env.PORT || process.env.OPENSHIFT_NODEJS_PORT || 8080,
-    ip   = process.env.IP   || process.env.OPENSHIFT_NODEJS_IP || '0.0.0.0',
-    mongoURL = process.env.OPENSHIFT_MONGODB_DB_URL || process.env.MONGO_URL,
-    mongoURLLabel = "";
+const app = express()
+const pkg = require('./package.json')
 
-if (mongoURL == null && process.env.DATABASE_SERVICE_NAME) {
-  var mongoServiceName = process.env.DATABASE_SERVICE_NAME.toUpperCase(),
-      mongoHost = process.env[mongoServiceName + '_SERVICE_HOST'],
-      mongoPort = process.env[mongoServiceName + '_SERVICE_PORT'],
-      mongoDatabase = process.env[mongoServiceName + '_DATABASE'],
-      mongoPassword = process.env[mongoServiceName + '_PASSWORD']
-      mongoUser = process.env[mongoServiceName + '_USER'];
+const port = process.env.PORT || process.env.OPENSHIFT_NODEJS_PORT || 8080
+const ip = process.env.IP || process.env.OPENSHIFT_NODEJS_IP || '0.0.0.0'
 
-  if (mongoHost && mongoPort && mongoDatabase) {
-    mongoURLLabel = mongoURL = 'mongodb://';
-    if (mongoUser && mongoPassword) {
-      mongoURL += mongoUser + ':' + mongoPassword + '@';
-    }
-    // Provide UI label that excludes user id and pw
-    mongoURLLabel += mongoHost + ':' + mongoPort + '/' + mongoDatabase;
-    mongoURL += mongoHost + ':' +  mongoPort + '/' + mongoDatabase;
-
+const instance = axios.create({
+  baseURL: 'https://od-api.oxforddictionaries.com:443/api',
+  timeout: 1000,
+  headers: {
+    app_id: process.env.APP_ID,
+    app_key: process.env.APP_KEY
   }
-}
-var db = null,
-    dbDetails = new Object();
+})
 
-var initDb = function(callback) {
-  if (mongoURL == null) return;
+app.get('/status', function (req, res) {
+  res.json(pkg)
+})
 
-  var mongodb = require('mongodb');
-  if (mongodb == null) return;
+app.get('/words/:word', function (req, res) {
+  const word = req.params.word
 
-  mongodb.connect(mongoURL, function(err, conn) {
-    if (err) {
-      callback(err);
-      return;
-    }
+  // TODO(fang): throw if word is not found
 
-    db = conn;
-    dbDetails.databaseName = db.databaseName;
-    dbDetails.url = mongoURLLabel;
-    dbDetails.type = 'MongoDB';
+  co(function * () {
+    const wordResults = []
 
-    console.log('Connected to MongoDB at: %s', mongoURL);
-  });
-};
+    // issue the API call
+    const result = yield instance.get(`/v1/entries/en/` + word)
+      .then(res => res.data)
 
-app.get('/', function (req, res) {
-  // try to initialize the db on every request if it's not already
-  // initialized.
-  if (!db) {
-    initDb(function(err){});
-  }
-  if (db) {
-    var col = db.collection('counts');
-    // Create a document with request IP and current time of request
-    col.insert({ip: req.ip, date: Date.now()});
-    col.count(function(err, count){
-      if (err) {
-        console.log('Error running count. Message:\n'+err);
+    const apiResults = _.get(result, 'results', [])
+    apiResults.forEach(apiResult => {
+      const wordResult = {}
+      wordResult.id = apiResult.id
+
+      const lexicalEntries = _.get(apiResult, 'lexicalEntries', [])
+      const headEntry = _.head(lexicalEntries)
+      if (headEntry) {
+        wordResult.category =
+        wordResult.language = headEntry.language
+
+        const pronounciation = _.head(_.get(headEntry, 'pronunciations', []))
+        if (pronounciation) {
+          wordResult.pronounciation = Object.assign(pronounciation, {
+            id: `${word}-audio`
+          })
+        }
       }
-      res.render('index.html', { pageCountMessage : count, dbInfo: dbDetails });
-    });
-  } else {
-    res.render('index.html', { pageCountMessage : null});
-  }
-});
 
-app.get('/pagecount', function (req, res) {
-  // try to initialize the db on every request if it's not already
-  // initialized.
-  if (!db) {
-    initDb(function(err){});
-  }
-  if (db) {
-    db.collection('counts').count(function(err, count ){
-      res.send('{ pageCount: ' + count + '}');
-    });
-  } else {
-    res.send('{ pageCount: -1 }');
-  }
-});
+      const wordDefintions = []
+      lexicalEntries.forEach(lexicalEntry => {
+        const partOfSpeech = _.upperCase(_.get(lexicalEntry, 'lexicalCategory', ''))
 
-// error handling
-app.use(function(err, req, res, next){
-  console.error(err.stack);
-  res.status(500).send('Something bad happened!');
-});
+        const entries = _.get(lexicalEntry, 'entries', [])
+        entries.forEach(entry => {
+          const senses = _.get(entry, 'senses', [])
+          senses.forEach(sense => {
+            const definitions = _.get(sense, 'definitions', [])
+            if (definitions.length > 0) {
+              const [definition] = definitions
 
-initDb(function(err){
-  console.log('Error connecting to Mongo. Message:\n'+err);
-});
+              wordDefintions.push({
+                id: sense.id,
+                defintion: definition,
+                partOfSpeech
+              })
+            }
+          })
+        })
+      })
 
-app.listen(port, ip);
-console.log('Server running on http://%s:%s', ip, port);
+      wordResult.definitions = wordDefintions
+      wordResults.push(wordResult)
+    })
 
-module.exports = app ;
+    res.json(wordResults)
+  })
+})
+
+app.listen(port, ip)
+console.log('Server running on http://%s:%s', ip, port)
+
+module.exports = app
