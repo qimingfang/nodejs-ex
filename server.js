@@ -76,6 +76,10 @@ router.get('/words/:word', function (req, res) {
         })
       })
 
+      if (wordDefintions.length > 0) {
+        wordDefintions[0].selected = true
+      }
+
       wordResult.definitions = wordDefintions
     }
 
